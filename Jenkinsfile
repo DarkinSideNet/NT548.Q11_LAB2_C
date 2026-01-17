@@ -100,6 +100,7 @@ kubectl apply -n micro-demo -f k8s/service-b-service.yaml
 kubectl apply -n micro-demo -f k8s/service-b-deployment.yaml
 kubectl apply -n micro-demo -f k8s/service-a-service.yaml
 kubectl apply -n micro-demo -f k8s/service-a-deployment.yaml
+kubectl apply -n micro-demo -f k8s/service-a-ingress.yaml
 
 # Update images to the freshly pushed ECR tags
 kubectl -n micro-demo set image deployment/service-b service-b="$IMAGE_B"

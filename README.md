@@ -283,7 +283,57 @@ curl http://localhost:8080/api
   - Xem log pod: `kubectl -n micro-demo logs deploy/service-a` (hoặc pod cụ thể)
   - Xem describe: `kubectl -n micro-demo describe pod <pod>`
 
-## 7) Mapping “Câu 3”
+## 7) Expose ra ngoài bằng Ingress NGINX
+
+Repo đã có sẵn Ingress manifest cho `service-a` tại `k8s/service-a-ingress.yaml`.
+
+### 7.1 Cài ingress-nginx controller (EKS)
+
+Cách khuyến nghị là cài bằng Helm (tạo Service type `LoadBalancer` để AWS cấp ELB):
+
+```bash
+helm repo add ingress-nginx https://kubernetes.github.io/ingress-nginx
+helm repo update
+
+helm install ingress-nginx ingress-nginx/ingress-nginx \
+  --namespace ingress-nginx --create-namespace
+```
+
+Chờ controller lên và lấy địa chỉ public (ELB):
+
+```bash
+kubectl -n ingress-nginx get pods
+kubectl -n ingress-nginx get svc ingress-nginx-controller
+```
+
+Trường `EXTERNAL-IP` (hoặc hostname) chính là endpoint để truy cập từ ngoài.
+
+### 7.2 Apply Ingress cho ứng dụng
+
+```bash
+kubectl apply -f k8s/namespace.yaml
+kubectl -n micro-demo apply -f k8s/service-a-service.yaml
+kubectl -n micro-demo apply -f k8s/service-a-deployment.yaml
+kubectl -n micro-demo apply -f k8s/service-a-ingress.yaml
+```
+
+Kiểm tra Ingress:
+
+```bash
+kubectl -n micro-demo get ingress
+kubectl -n micro-demo describe ingress service-a
+```
+
+Test từ ngoài (thay `<LB_HOST>` bằng EXTERNAL-IP/hostname của ingress-nginx):
+
+```bash
+curl http://<LB_HOST>/healthz
+curl http://<LB_HOST>/api
+```
+
+> Lưu ý: `service-b` để nội bộ cluster (ClusterIP) và được `service-a` gọi qua DNS `http://service-b:3000`.
+
+## 8) Mapping “Câu 3”
 
 - Ứng dụng microservices: `services/service-a` và `services/service-b`
 - Docker hoá: mỗi service có `Dockerfile`
