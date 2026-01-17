@@ -47,9 +47,16 @@ echo "EKS_CLUSTER_NAME=$EKS_CLUSTER_NAME"
 echo "ECR_REPO_SERVICE_A=$ECR_REPO_SERVICE_A"
 echo "ECR_REPO_SERVICE_B=$ECR_REPO_SERVICE_B"
 
-command -v aws >/dev/null
-command -v kubectl >/dev/null
-command -v docker >/dev/null
+for cmd in aws kubectl docker; do
+  if ! command -v "$cmd" >/dev/null 2>&1; then
+    echo "ERROR: missing required tool '$cmd' on this Jenkins agent (not in PATH)." >&2
+    exit 1
+  fi
+done
+
+echo "aws version: $(aws --version 2>&1)"
+echo "kubectl version: $(kubectl version --client --short 2>/dev/null || kubectl version --client 2>/dev/null || true)"
+echo "docker version: $(docker --version 2>&1)"
 '''
       }
     }

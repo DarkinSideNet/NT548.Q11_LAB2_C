@@ -276,8 +276,23 @@ curl http://localhost:8080/api
   - IAM của Jenkins chưa được map vào quyền K8s (aws-auth / access entry) hoặc thiếu RBAC trong namespace `micro-demo`.
 
 - `kubectl apply` OK nhưng pod `ImagePullBackOff`
-  - Image tag/repo sai hoặc EKS node chưa có quyền pull ECR.
-  - Đảm bảo node group role có quyền ECR read (thường có sẵn nếu dùng managed node group chuẩn).
+  - Nếu bạn thấy image vẫn là `service-a:local` hoặc `service-b:local` thì đây là **image placeholder**. K8s sẽ cố pull từ DockerHub (`docker.io/library/service-a:local`) và fail.
+  - Cách fix nhanh: set image sang ECR (thay đúng account/repo/tag):
+
+    ```bash
+    export AWS_REGION=<AWS_REGION>
+    export AWS_ACCOUNT_ID=<AWS_ACCOUNT_ID>
+    export ECR_REGISTRY="$AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com"
+
+    kubectl -n micro-demo set image deployment/service-b service-b="$ECR_REGISTRY/<ECR_REPO_SERVICE_B>:<TAG>"
+    kubectl -n micro-demo set image deployment/service-a service-a="$ECR_REGISTRY/<ECR_REPO_SERVICE_A>:<TAG>"
+
+    kubectl -n micro-demo rollout status deployment/service-b --timeout=180s
+    kubectl -n micro-demo rollout status deployment/service-a --timeout=180s
+    ```
+
+  - Nếu chạy qua Jenkins pipeline thì Jenkins sẽ tự build/push và `kubectl set image` giúp bạn.
+  - Nếu image/tag đúng mà vẫn fail: có thể EKS node chưa có quyền pull ECR; kiểm tra IAM role của node group.
 
 - `kubectl rollout status ... timeout`
   - Xem log pod: `kubectl -n micro-demo logs deploy/service-a` (hoặc pod cụ thể)
