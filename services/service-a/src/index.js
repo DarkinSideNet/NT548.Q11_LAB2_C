@@ -158,18 +158,21 @@ function page(title, body) {
       }
       
       label {
-        display: block;
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
         margin-bottom: 15px;
         color: #555;
         font-weight: 600;
       }
       
+      input:not([type]),
       input[type="text"],
       input[type="password"],
       input[type="number"] {
+        display: block;
         width: 100%;
         padding: 12px 15px;
-        margin-top: 5px;
         border: 2px solid #e9ecef;
         border-radius: 8px;
         font-size: 16px;
