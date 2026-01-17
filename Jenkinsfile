@@ -51,6 +51,22 @@ echo "ECR_REPO_SERVICE_A=$ECR_REPO_SERVICE_A"
 echo "ECR_REPO_SERVICE_B=$ECR_REPO_SERVICE_B"
 echo "ECR_REPO_SERVICE_C=$ECR_REPO_SERVICE_C"
 
+require_var() {
+  local name="$1"
+  local value="${!name:-}"
+  if [[ -z "$value" || "$value" == "null" ]]; then
+    echo "ERROR: missing required env var '$name'. Set it in Jenkins job environment variables." >&2
+    exit 1
+  fi
+}
+
+require_var AWS_REGION
+require_var AWS_ACCOUNT_ID
+require_var EKS_CLUSTER_NAME
+require_var ECR_REPO_SERVICE_A
+require_var ECR_REPO_SERVICE_B
+require_var ECR_REPO_SERVICE_C
+
 for cmd in aws kubectl docker; do
   if ! command -v "$cmd" >/dev/null 2>&1; then
     echo "ERROR: missing required tool '$cmd' on this Jenkins agent (not in PATH)." >&2
