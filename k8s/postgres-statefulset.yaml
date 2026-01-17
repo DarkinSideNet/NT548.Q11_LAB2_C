@@ -22,6 +22,8 @@ spec:
           env:
             - name: POSTGRES_DB
               value: inventory
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
             - name: POSTGRES_USER
               value: inventory
             - name: POSTGRES_PASSWORD
