@@ -21,30 +21,24 @@ GitHub (push) -> Jenkins Pipeline -> build Docker image -> push ECR -> kubectl d
 
 Pipeline đã có sẵn trong `Jenkinsfile` (build & push lên ECR, sau đó `kubectl apply` + `kubectl set image`).
 
-## Kiểm tra chất lượng & bảo mật (SonarQube / Trivy / Snyk)
+## SonarQube / Trivy / Snyk (cài đặt & tích hợp Jenkins)
 
-Pipeline Jenkins đã tích hợp:
+### Tổng quan (quan trọng)
 
-- **SonarQube (bắt buộc)**: chạy stage `SonarQube Scan` để kiểm tra chất lượng mã nguồn.
-- **Trivy (tuỳ chọn)**: quét lỗ hổng image sau khi build (bật bằng `TRIVY_ENABLED=true`).
-- **Snyk (tuỳ chọn)**: quét lỗ hổng image (bật bằng `SNYK_ENABLED=true`).
+- **SonarQube Server**: là web/app chạy nền lâu dài (UI + DB + Elasticsearch). Repo này cung cấp file Docker Compose để bạn tự dựng.
+- **Sonar Scanner**: chạy trong Jenkins pipeline để phân tích source và đẩy kết quả lên SonarQube Server.
 
-Cần cấu hình Jenkins job:
+Pipeline trong `Jenkinsfile` đã có các stage:
 
-- **Environment variables**:
-  - `SONAR_HOST_URL`
-  - `SONAR_PROJECT_KEY`
-  - (tuỳ chọn) `TRIVY_ENABLED=true`
-  - (tuỳ chọn) `SNYK_ENABLED=true`
-- **Jenkins credentials**:
-  - Secret text credential id `sonar-token`
-  - (tuỳ chọn) Secret text credential id `snyk-token`
+- **SonarQube Scan (bắt buộc)**
+- **Trivy Scan (tuỳ chọn)**: bật bằng `TRIVY_ENABLED=true`
+- **Snyk Scan (tuỳ chọn)**: bật bằng `SNYK_ENABLED=true`
 
-### Chạy SonarQube bằng Docker ngay trên host Jenkins
+### 1) Cài SonarQube Server bằng Docker Compose (trên host Jenkins/EC2)
 
-Repo đã kèm file Compose: [docker-compose.sonarqube.yml](docker-compose.sonarqube.yml).
+Repo đã kèm file: [docker-compose.sonarqube.yml](docker-compose.sonarqube.yml).
 
-1) Trên **host cài Jenkins**, tăng kernel setting (bắt buộc cho Elasticsearch trong SonarQube):
+1) Bắt buộc tăng kernel setting cho Elasticsearch (nếu không sẽ crash và UI không vào được):
 
 ```bash
 sudo sysctl -w vm.max_map_count=262144
@@ -59,20 +53,80 @@ docker compose -f docker-compose.sonarqube.yml up -d
 docker compose -f docker-compose.sonarqube.yml ps
 ```
 
-3) Mở SonarQube UI: `http://<JENKINS_HOST_IP>:9000`
+3) Đợi SonarQube sẵn sàng:
 
-- Lần đầu đăng nhập: `admin` / `admin` (Sonar sẽ bắt đổi password)
-- Tạo token: **My Account → Security → Generate Tokens**
+```bash
+curl -sS http://localhost:9000/api/system/status
+```
 
-4) Cấu hình Jenkins Job:
+Khi OK sẽ thấy JSON có `"status":"UP"`. Lần đầu có thể mất vài phút.
 
-- `SONAR_HOST_URL`:
-  - Nếu Jenkins agent chạy **trên cùng host**: dùng `http://localhost:9000`.
-  - Nếu Jenkins agent chạy **ở máy khác**: dùng `http://<JENKINS_HOST_IP>:9000`.
-- `SONAR_PROJECT_KEY`: đặt 1 key duy nhất (vd `nt548-lab2-inventory`).
-- Credential `sonar-token`: token vừa tạo ở SonarQube.
+4) Mở UI:
 
-Ghi chú: `Jenkinsfile` đã xử lý trường hợp `SONAR_HOST_URL` là `localhost` bằng cách chạy sonar-scanner container với `--network host` để truy cập SonarQube trên host.
+- Nếu bạn đang ngồi trên chính host: `http://localhost:9000`
+- Nếu bạn truy cập từ máy khác: `http://<JENKINS_HOST_PUBLIC_IP>:9000`
+
+Gợi ý an toàn: không mở port 9000 public; dùng SSH tunnel:
+
+```bash
+ssh -L 9000:localhost:9000 ubuntu@<JENKINS_HOST_PUBLIC_IP>
+```
+
+Rồi mở `http://localhost:9000` trên máy bạn.
+
+### 2) Tạo project để lấy `SONAR_PROJECT_KEY`
+
+1) Đăng nhập SonarQube (lần đầu: `admin` / `admin`, sẽ bắt đổi password).
+2) **Projects → Create project → Manually**.
+3) Nhập:
+
+- **Project display name**: tuỳ bạn
+- **Project key**: dạng không dấu/không space, ví dụ `nt548-lab2`
+
+Giá trị **Project key** chính là biến `SONAR_PROJECT_KEY` bạn sẽ cấu hình trong Jenkins.
+
+### 3) Tạo token để Jenkins scan (`sonar-token`)
+
+Trong SonarQube: avatar góc phải → **My Account → Security → Generate Tokens** → generate token (ví dụ đặt tên `jenkins`) → copy token.
+
+Trong Jenkins:
+
+1) **Manage Jenkins → Credentials** → tạo **Secret text**.
+2) **Secret**: dán token vừa generate.
+3) **ID**: đặt đúng `sonar-token` (pipeline đang dùng id này).
+
+### 4) Cấu hình Jenkins job (Environment variables)
+
+Trong Jenkins job → **Configure** → thêm các biến:
+
+- `SONAR_HOST_URL`
+  - Nếu Jenkins agent chạy **cùng host** với SonarQube: `http://localhost:9000`
+  - Nếu Jenkins agent chạy **máy khác**: dùng URL/IP mà agent truy cập được (vd `http://<JENKINS_HOST_PRIVATE_OR_PUBLIC_IP>:9000`)
+- `SONAR_PROJECT_KEY` = project key bạn đặt ở bước (2)
+
+Các biến AWS/EKS/ECR (bắt buộc để build/push/deploy):
+
+- `AWS_REGION`, `AWS_ACCOUNT_ID`, `EKS_CLUSTER_NAME`
+- `ECR_REPO_SERVICE_A`, `ECR_REPO_SERVICE_B`, `ECR_REPO_SERVICE_C`
+
+Tuỳ chọn security scan:
+
+- `TRIVY_ENABLED=true` (để chạy Trivy scan)
+- `SNYK_ENABLED=true` + credential id `snyk-token` (để chạy Snyk scan)
+
+### 5) Chạy Jenkins pipeline và xem kết quả
+
+Chạy job Jenkins → vào SonarQube project → sẽ thấy analysis mới.
+
+Ghi chú: Pipeline sẽ "wait" SonarQube lên `UP` trước khi chạy sonar-scanner; nếu `SONAR_HOST_URL` là localhost thì scanner container sẽ dùng `--network host`.
+
+### 6) Troubleshooting nhanh
+
+- **UI không vào được / `curl localhost:9000` bị reset/refused**: gần như chắc chắn thiếu `vm.max_map_count`.
+  - Kiểm tra: `sysctl vm.max_map_count`
+  - Log: `docker logs --tail=200 sonarqube`
+- **Vào được bằng localhost nhưng không vào được bằng Public IP**: kiểm tra Security Group/firewall port 9000, hoặc dùng SSH tunnel.
+- **Scan fail vì branch/PR**: SonarQube Community có thể giới hạn tính năng branch/PR. Nếu gặp lỗi, có thể chỉnh pipeline để không truyền `sonar.branch.name` (tuỳ yêu cầu).
 
 ## 1) Yêu cầu môi trường
 
