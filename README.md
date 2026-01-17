@@ -430,6 +430,40 @@ Các manifest Postgres:
 - `k8s/postgres-service.yaml`
 - `k8s/postgres-statefulset.yaml`
 
+### 8.1 Chạy Postgres với PVC (khuyến nghị)
+
+`k8s/postgres-statefulset.yaml` dùng PVC và yêu cầu EBS CSI hoạt động để provision volume.
+
+- StorageClass CSI (apply 1 lần): `k8s/storageclass-gp2-csi.yaml`
+- Nếu pod `postgres-0` bị `Pending` với lỗi `unbound immediate PersistentVolumeClaims`:
+  - Kiểm tra CSI driver có chạy:
+
+    ```bash
+    kubectl get csidrivers
+    kubectl -n kube-system get pods | grep -E 'ebs-csi|aws-ebs-csi'
+    ```
+
+  - Nếu chưa có EBS CSI driver addon (EKS):
+
+    ```bash
+    aws eks list-addons --cluster-name <EKS_CLUSTER_NAME> --region <AWS_REGION>
+    aws eks create-addon --cluster-name <EKS_CLUSTER_NAME> --addon-name aws-ebs-csi-driver --region <AWS_REGION>
+    ```
+
+  - Apply StorageClass CSI và tạo lại PVC (nếu PVC đang Pending từ đầu):
+
+    ```bash
+    kubectl apply -f k8s/storageclass-gp2-csi.yaml
+    kubectl -n micro-demo delete pvc data-postgres-0 --ignore-not-found
+    kubectl -n micro-demo delete pod postgres-0 --ignore-not-found
+    ```
+
+### 8.2 Chạy Postgres không dùng PVC (ephemeral, chạy nhanh)
+
+Nếu chỉ cần demo nhanh và chấp nhận mất dữ liệu khi pod restart, dùng manifest:
+
+- `k8s/postgres-statefulset-ephemeral.yaml`
+
 Bạn nên đổi password/secret trước khi dùng thật. Hiện tại file Secret dùng giá trị demo (base64) để chạy nhanh.
 
 ## 9) Mapping “Câu 3”

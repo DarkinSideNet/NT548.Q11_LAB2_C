@@ -129,6 +129,10 @@ set -euo pipefail
 aws eks update-kubeconfig --region "$AWS_REGION" --name "$EKS_CLUSTER_NAME"
 
 kubectl apply -f k8s/namespace.yaml
+
+# Optional: create EBS CSI storageclass if Jenkins has cluster-level RBAC
+kubectl apply -f k8s/storageclass-gp2-csi.yaml 2>/dev/null || echo "WARN: could not apply storageclass-gp2-csi (need cluster-admin). Apply it manually once if PVC is Pending."
+
 kubectl apply -n micro-demo -f k8s/postgres-secret.yaml
 kubectl apply -n micro-demo -f k8s/postgres-service.yaml
 kubectl apply -n micro-demo -f k8s/postgres-statefulset.yaml
