@@ -133,6 +133,9 @@ kubectl apply -n micro-demo -f k8s/postgres-secret.yaml
 kubectl apply -n micro-demo -f k8s/postgres-service.yaml
 kubectl apply -n micro-demo -f k8s/postgres-statefulset.yaml
 
+# Wait for PostgreSQL to be ready before deploying services that depend on it
+kubectl -n micro-demo rollout status statefulset/postgres --timeout=300s
+
 kubectl apply -n micro-demo -f k8s/service-b-service.yaml
 kubectl apply -n micro-demo -f k8s/service-b-deployment.yaml
 kubectl apply -n micro-demo -f k8s/service-c-service.yaml
@@ -146,9 +149,23 @@ kubectl -n micro-demo set image deployment/service-b service-b="$IMAGE_B"
 kubectl -n micro-demo set image deployment/service-c service-c="$IMAGE_C"
 kubectl -n micro-demo set image deployment/service-a service-a="$IMAGE_A"
 
-kubectl -n micro-demo rollout status deployment/service-b --timeout=180s
-kubectl -n micro-demo rollout status deployment/service-c --timeout=180s
-kubectl -n micro-demo rollout status deployment/service-a --timeout=180s
+rollout_or_debug() {
+  local kind="$1"
+  local name="$2"
+  if ! kubectl -n micro-demo rollout status "$kind/$name" --timeout=300s; then
+    echo "\n==== DEBUG: rollout failed for $kind/$name ====" >&2
+    kubectl -n micro-demo get pods -o wide || true
+    kubectl -n micro-demo describe "$kind/$name" || true
+    kubectl -n micro-demo get events --sort-by=.lastTimestamp | tail -n 80 || true
+    kubectl -n micro-demo logs "$kind/$name" --tail=200 || true
+    echo "==== END DEBUG ====" >&2
+    return 1
+  fi
+}
+
+rollout_or_debug deployment service-b
+rollout_or_debug deployment service-c
+rollout_or_debug deployment service-a
 
 kubectl -n micro-demo get pods -o wide
 '''

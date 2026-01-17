@@ -50,6 +50,26 @@ async function migrate() {
   `);
 }
 
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function migrateWithRetry({ attempts, delayMs }) {
+  let lastError;
+  for (let i = 1; i <= attempts; i += 1) {
+    try {
+      await migrate();
+      return;
+    } catch (e) {
+      lastError = e;
+      // eslint-disable-next-line no-console
+      console.warn(`PostgreSQL not ready (attempt ${i}/${attempts}): ${String(e?.message ?? e)}`);
+      await sleep(delayMs);
+    }
+  }
+  throw lastError;
+}
+
 app.get('/healthz', (_req, res) => {
   res.status(200).json({ ok: true, service: 'service-b' });
 });
@@ -210,7 +230,8 @@ app.get('/internal/transactions', async (req, res) => {
 });
 
 async function start() {
-  await migrate();
+  // Postgres in K8s may take time to start; retry migrations to avoid CrashLoop.
+  await migrateWithRetry({ attempts: 60, delayMs: 2000 });
   app.listen(port, () => {
     // eslint-disable-next-line no-console
     console.log(`service-b listening on :${port} (PostgreSQL connected)`);
