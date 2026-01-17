@@ -21,6 +21,59 @@ GitHub (push) -> Jenkins Pipeline -> build Docker image -> push ECR -> kubectl d
 
 Pipeline đã có sẵn trong `Jenkinsfile` (build & push lên ECR, sau đó `kubectl apply` + `kubectl set image`).
 
+## Kiểm tra chất lượng & bảo mật (SonarQube / Trivy / Snyk)
+
+Pipeline Jenkins đã tích hợp:
+
+- **SonarQube (bắt buộc)**: chạy stage `SonarQube Scan` để kiểm tra chất lượng mã nguồn.
+- **Trivy (tuỳ chọn)**: quét lỗ hổng image sau khi build (bật bằng `TRIVY_ENABLED=true`).
+- **Snyk (tuỳ chọn)**: quét lỗ hổng image (bật bằng `SNYK_ENABLED=true`).
+
+Cần cấu hình Jenkins job:
+
+- **Environment variables**:
+  - `SONAR_HOST_URL`
+  - `SONAR_PROJECT_KEY`
+  - (tuỳ chọn) `TRIVY_ENABLED=true`
+  - (tuỳ chọn) `SNYK_ENABLED=true`
+- **Jenkins credentials**:
+  - Secret text credential id `sonar-token`
+  - (tuỳ chọn) Secret text credential id `snyk-token`
+
+### Chạy SonarQube bằng Docker ngay trên host Jenkins
+
+Repo đã kèm file Compose: [docker-compose.sonarqube.yml](docker-compose.sonarqube.yml).
+
+1) Trên **host cài Jenkins**, tăng kernel setting (bắt buộc cho Elasticsearch trong SonarQube):
+
+```bash
+sudo sysctl -w vm.max_map_count=262144
+echo 'vm.max_map_count=262144' | sudo tee /etc/sysctl.d/99-sonarqube.conf
+sudo sysctl --system
+```
+
+2) Start SonarQube + PostgreSQL:
+
+```bash
+docker compose -f docker-compose.sonarqube.yml up -d
+docker compose -f docker-compose.sonarqube.yml ps
+```
+
+3) Mở SonarQube UI: `http://<JENKINS_HOST_IP>:9000`
+
+- Lần đầu đăng nhập: `admin` / `admin` (Sonar sẽ bắt đổi password)
+- Tạo token: **My Account → Security → Generate Tokens**
+
+4) Cấu hình Jenkins Job:
+
+- `SONAR_HOST_URL`:
+  - Nếu Jenkins agent chạy **trên cùng host**: dùng `http://localhost:9000`.
+  - Nếu Jenkins agent chạy **ở máy khác**: dùng `http://<JENKINS_HOST_IP>:9000`.
+- `SONAR_PROJECT_KEY`: đặt 1 key duy nhất (vd `nt548-lab2-inventory`).
+- Credential `sonar-token`: token vừa tạo ở SonarQube.
+
+Ghi chú: `Jenkinsfile` đã xử lý trường hợp `SONAR_HOST_URL` là `localhost` bằng cách chạy sonar-scanner container với `--network host` để truy cập SonarQube trên host.
+
 ## 1) Yêu cầu môi trường
 
 ### Jenkins agent cần có

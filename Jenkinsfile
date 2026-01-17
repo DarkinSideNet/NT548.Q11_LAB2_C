@@ -16,6 +16,20 @@ pipeline {
 
     // Derived
     ECR_REGISTRY = "${env.AWS_ACCOUNT_ID}.dkr.ecr.${env.AWS_REGION}.amazonaws.com"
+
+    // Quality & Security scans
+    // Required for SonarQube stage:
+    // - SONAR_HOST_URL (e.g. https://sonarqube.yourdomain)
+    // - SONAR_PROJECT_KEY (unique key in SonarQube)
+    // - Jenkins secret text credential id 'sonar-token'
+    SONAR_HOST_URL = "${env.SONAR_HOST_URL}"
+    SONAR_PROJECT_KEY = "${env.SONAR_PROJECT_KEY}"
+
+    // Optional security tools
+    // Set TRIVY_ENABLED=true to scan images after build (recommended for labs)
+    // Set SNYK_ENABLED=true to run Snyk scans (requires credential id 'snyk-token')
+    TRIVY_ENABLED = "${env.TRIVY_ENABLED}"
+    SNYK_ENABLED = "${env.SNYK_ENABLED}"
   }
 
   stages {
@@ -51,6 +65,11 @@ echo "ECR_REPO_SERVICE_A=$ECR_REPO_SERVICE_A"
 echo "ECR_REPO_SERVICE_B=$ECR_REPO_SERVICE_B"
 echo "ECR_REPO_SERVICE_C=$ECR_REPO_SERVICE_C"
 
+echo "SONAR_HOST_URL=${SONAR_HOST_URL:-}"
+echo "SONAR_PROJECT_KEY=${SONAR_PROJECT_KEY:-}"
+echo "TRIVY_ENABLED=${TRIVY_ENABLED:-}"
+echo "SNYK_ENABLED=${SNYK_ENABLED:-}"
+
 require_var() {
   local name="$1"
   local value="${!name:-}"
@@ -67,6 +86,10 @@ require_var ECR_REPO_SERVICE_A
 require_var ECR_REPO_SERVICE_B
 require_var ECR_REPO_SERVICE_C
 
+# SonarQube is intended to be always-on. Fail early with a clear message if missing.
+require_var SONAR_HOST_URL
+require_var SONAR_PROJECT_KEY
+
 for cmd in aws kubectl docker; do
   if ! command -v "$cmd" >/dev/null 2>&1; then
     echo "ERROR: missing required tool '$cmd' on this Jenkins agent (not in PATH)." >&2
@@ -81,7 +104,130 @@ echo "docker version: $(docker --version 2>&1)"
       }
     }
 
-    stage('Build & Push (ECR)') {
+    stage('SonarQube Scan') {
+      steps {
+        withCredentials([
+          string(credentialsId: 'sonar-token', variable: 'SONAR_TOKEN')
+        ]) {
+          sh '''#!/usr/bin/env bash
+set -euo pipefail
+
+# If SonarQube runs on the same host and SONAR_HOST_URL points to localhost,
+# the scanner container must use host networking to reach it.
+DOCKER_NET=""
+if [[ "$SONAR_HOST_URL" == *"://localhost"* || "$SONAR_HOST_URL" == *"://127.0.0.1"* ]]; then
+  DOCKER_NET="--network host"
+fi
+
+# Wait until SonarQube is ready (avoid flaky first-run)
+echo "Waiting for SonarQube to be UP at $SONAR_HOST_URL ..."
+for i in $(seq 1 60); do
+  if docker run --rm $DOCKER_NET curlimages/curl:8.5.0 -fsS "$SONAR_HOST_URL/api/system/status" \
+    | grep -q '"status":"UP"'; then
+    echo "SonarQube is UP"
+    break
+  fi
+  echo "  not ready yet ($i/60)"; sleep 2
+  if [[ "$i" == "60" ]]; then
+    echo "ERROR: SonarQube not ready after 120s" >&2
+    exit 1
+  fi
+done
+
+if [[ ! -f sonar-project.properties ]]; then
+  echo "ERROR: missing sonar-project.properties at repo root" >&2
+  exit 1
+fi
+
+echo "Running SonarQube scan via Dockerized sonar-scanner..."
+
+# Note: using :latest for convenience; pin this tag for fully reproducible builds.
+
+# Optional: pass branch name if Jenkins provides it
+BRANCH_ARG=""
+if [[ -n "${BRANCH_NAME:-}" ]]; then
+  BRANCH_ARG="-Dsonar.branch.name=${BRANCH_NAME}"
+fi
+
+docker run --rm $DOCKER_NET \
+  -e SONAR_HOST_URL="$SONAR_HOST_URL" \
+  -e SONAR_TOKEN="$SONAR_TOKEN" \
+  -v "$WORKSPACE:/usr/src" \
+  -w /usr/src \
+  sonarsource/sonar-scanner-cli:latest \
+  sonar-scanner \
+    -Dsonar.host.url="$SONAR_HOST_URL" \
+    -Dsonar.token="$SONAR_TOKEN" \
+    -Dsonar.projectKey="$SONAR_PROJECT_KEY" \
+    $BRANCH_ARG
+'''
+        }
+      }
+    }
+
+    stage('Build Images') {
+      steps {
+        sh '''#!/usr/bin/env bash
+set -euo pipefail
+echo "Building $IMAGE_A"
+docker build -t "$IMAGE_A" services/service-a
+
+echo "Building $IMAGE_B"
+docker build -t "$IMAGE_B" services/service-b
+
+docker build -t "$IMAGE_C" services/service-c
+'''
+      }
+    }
+
+    stage('Trivy Scan (optional)') {
+      when {
+        expression { return env.TRIVY_ENABLED == 'true' }
+      }
+      steps {
+        sh '''#!/usr/bin/env bash
+set -euo pipefail
+
+echo "Running Trivy image scan (HIGH,CRITICAL)..."
+
+for img in "$IMAGE_A" "$IMAGE_B" "$IMAGE_C"; do
+  echo "Scanning $img"
+  docker run --rm \
+    -v /var/run/docker.sock:/var/run/docker.sock \
+    aquasec/trivy:0.49.1 \
+      image --no-progress --severity HIGH,CRITICAL --exit-code 1 "$img"
+done
+'''
+      }
+    }
+
+    stage('Snyk Scan (optional)') {
+      when {
+        expression { return env.SNYK_ENABLED == 'true' }
+      }
+      steps {
+        withCredentials([
+          string(credentialsId: 'snyk-token', variable: 'SNYK_TOKEN')
+        ]) {
+          sh '''#!/usr/bin/env bash
+set -euo pipefail
+
+echo "Running Snyk container scan (severity>=high)..."
+
+for img in "$IMAGE_A" "$IMAGE_B" "$IMAGE_C"; do
+  echo "Scanning $img"
+  docker run --rm \
+    -e SNYK_TOKEN="$SNYK_TOKEN" \
+    -v /var/run/docker.sock:/var/run/docker.sock \
+    snyk/snyk:docker \
+      snyk container test "$img" --severity-threshold=high
+done
+'''
+        }
+      }
+    }
+
+    stage('Push Images (ECR)') {
       steps {
         withCredentials([
           string(credentialsId: 'aws-access-key-id', variable: 'AWS_ACCESS_KEY_ID'),
@@ -94,15 +240,6 @@ aws --version
 
 aws ecr get-login-password --region "$AWS_REGION" \
   | docker login --username AWS --password-stdin "$ECR_REGISTRY"
-
-echo "Building $IMAGE_A"
-docker build -t "$IMAGE_A" services/service-a
-
-echo "Building $IMAGE_B"
-docker build -t "$IMAGE_B" services/service-b
-
-echo "Building $IMAGE_C"
-docker build -t "$IMAGE_C" services/service-c
 
 echo "Pushing $IMAGE_A"
 docker push "$IMAGE_A"
