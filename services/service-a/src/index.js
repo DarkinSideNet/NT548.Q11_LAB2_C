@@ -5,6 +5,47 @@ const app = express();
 const port = Number.parseInt(process.env.PORT ?? '3000', 10);
 const serviceBUrl = process.env.SERVICE_B_URL ?? 'http://service-b:3000';
 
+app.get('/', (_req, res) => {
+  res.status(200).type('html').send(`<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Micro Demo</title>
+  </head>
+  <body>
+    <h1>Microservices Demo</h1>
+    <p>This page calls <code>/api</code> on service-a, which calls service-b.</p>
+
+    <button id="call">Call /api</button>
+    <pre id="out" style="white-space: pre-wrap;"></pre>
+
+    <script>
+      const out = document.getElementById('out');
+      const btn = document.getElementById('call');
+
+      async function callApi() {
+        out.textContent = 'Loading...';
+        try {
+          const r = await fetch('/api', { headers: { 'accept': 'application/json' } });
+          const text = await r.text();
+          try {
+            out.textContent = JSON.stringify(JSON.parse(text), null, 2);
+          } catch {
+            out.textContent = text;
+          }
+        } catch (e) {
+          out.textContent = String(e);
+        }
+      }
+
+      btn.addEventListener('click', callApi);
+      callApi();
+    </script>
+  </body>
+</html>`);
+});
+
 app.get('/healthz', (_req, res) => {
   res.status(200).json({ ok: true, service: 'service-a' });
 });
