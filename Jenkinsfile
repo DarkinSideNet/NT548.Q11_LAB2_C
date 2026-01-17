@@ -12,6 +12,7 @@ pipeline {
     EKS_CLUSTER_NAME = "${env.EKS_CLUSTER_NAME}"
     ECR_REPO_SERVICE_A = "${env.ECR_REPO_SERVICE_A}"
     ECR_REPO_SERVICE_B = "${env.ECR_REPO_SERVICE_B}"
+    ECR_REPO_SERVICE_C = "${env.ECR_REPO_SERVICE_C}"
 
     // Derived
     ECR_REGISTRY = "${env.AWS_ACCOUNT_ID}.dkr.ecr.${env.AWS_REGION}.amazonaws.com"
@@ -24,6 +25,7 @@ pipeline {
           env.IMAGE_TAG = env.GIT_COMMIT ? env.GIT_COMMIT.take(7) : env.BUILD_NUMBER
           env.IMAGE_A = "${env.ECR_REGISTRY}/${env.ECR_REPO_SERVICE_A}:${env.IMAGE_TAG}"
           env.IMAGE_B = "${env.ECR_REGISTRY}/${env.ECR_REPO_SERVICE_B}:${env.IMAGE_TAG}"
+          env.IMAGE_C = "${env.ECR_REGISTRY}/${env.ECR_REPO_SERVICE_C}:${env.IMAGE_TAG}"
         }
 
         sh '''#!/usr/bin/env bash
@@ -32,6 +34,7 @@ set -euo pipefail
 echo "IMAGE_TAG=$IMAGE_TAG"
 echo "IMAGE_A=$IMAGE_A"
 echo "IMAGE_B=$IMAGE_B"
+echo "IMAGE_C=$IMAGE_C"
 '''
       }
     }
@@ -46,6 +49,7 @@ echo "AWS_ACCOUNT_ID=$AWS_ACCOUNT_ID"
 echo "EKS_CLUSTER_NAME=$EKS_CLUSTER_NAME"
 echo "ECR_REPO_SERVICE_A=$ECR_REPO_SERVICE_A"
 echo "ECR_REPO_SERVICE_B=$ECR_REPO_SERVICE_B"
+echo "ECR_REPO_SERVICE_C=$ECR_REPO_SERVICE_C"
 
 for cmd in aws kubectl docker; do
   if ! command -v "$cmd" >/dev/null 2>&1; then
@@ -81,11 +85,17 @@ docker build -t "$IMAGE_A" services/service-a
 echo "Building $IMAGE_B"
 docker build -t "$IMAGE_B" services/service-b
 
+echo "Building $IMAGE_C"
+docker build -t "$IMAGE_C" services/service-c
+
 echo "Pushing $IMAGE_A"
 docker push "$IMAGE_A"
 
 echo "Pushing $IMAGE_B"
 docker push "$IMAGE_B"
+
+echo "Pushing $IMAGE_C"
+docker push "$IMAGE_C"
 '''
         }
       }
@@ -103,17 +113,25 @@ set -euo pipefail
 aws eks update-kubeconfig --region "$AWS_REGION" --name "$EKS_CLUSTER_NAME"
 
 kubectl apply -f k8s/namespace.yaml
+kubectl apply -n micro-demo -f k8s/postgres-secret.yaml
+kubectl apply -n micro-demo -f k8s/postgres-service.yaml
+kubectl apply -n micro-demo -f k8s/postgres-statefulset.yaml
+
 kubectl apply -n micro-demo -f k8s/service-b-service.yaml
 kubectl apply -n micro-demo -f k8s/service-b-deployment.yaml
+kubectl apply -n micro-demo -f k8s/service-c-service.yaml
+kubectl apply -n micro-demo -f k8s/service-c-deployment.yaml
 kubectl apply -n micro-demo -f k8s/service-a-service.yaml
 kubectl apply -n micro-demo -f k8s/service-a-deployment.yaml
 kubectl apply -n micro-demo -f k8s/service-a-ingress.yaml
 
 # Update images to the freshly pushed ECR tags
 kubectl -n micro-demo set image deployment/service-b service-b="$IMAGE_B"
+kubectl -n micro-demo set image deployment/service-c service-c="$IMAGE_C"
 kubectl -n micro-demo set image deployment/service-a service-a="$IMAGE_A"
 
 kubectl -n micro-demo rollout status deployment/service-b --timeout=180s
+kubectl -n micro-demo rollout status deployment/service-c --timeout=180s
 kubectl -n micro-demo rollout status deployment/service-a --timeout=180s
 
 kubectl -n micro-demo get pods -o wide

@@ -1,26 +1,31 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: service-a
+  name: service-c
   namespace: micro-demo
 spec:
   replicas: 1
   selector:
     matchLabels:
-      app: service-a
+      app: service-c
   template:
     metadata:
       labels:
-        app: service-a
+        app: service-c
     spec:
       containers:
-        - name: service-a
-          image: service-a:local
+        - name: service-c
+          image: service-c:local
           ports:
             - containerPort: 3000
           env:
-            - name: SERVICE_C_URL
-              value: "http://service-c:3000"
+            - name: SERVICE_B_URL
+              value: "http://service-b:3000"
+            - name: JWT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-secret
+                  key: JWT_SECRET
           readinessProbe:
             httpGet:
               path: /healthz

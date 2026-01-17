@@ -18,6 +18,12 @@ spec:
           image: service-b:local
           ports:
             - containerPort: 3000
+          env:
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-secret
+                  key: DATABASE_URL
           readinessProbe:
             httpGet:
               path: /healthz

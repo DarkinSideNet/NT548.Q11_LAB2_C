@@ -1,5 +1,5 @@
 {
-  "name": "service-b",
+  "name": "service-c",
   "version": "1.0.0",
   "private": true,
   "type": "module",
@@ -9,8 +9,7 @@
     "start": "node src/index.js"
   },
   "dependencies": {
-    "bcryptjs": "^2.4.3",
     "express": "^4.18.3",
-    "pg": "^8.11.5"
+    "jsonwebtoken": "^9.0.2"
   }
 }

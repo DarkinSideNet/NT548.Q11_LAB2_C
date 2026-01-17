@@ -1,8 +1,17 @@
-# NT548 Lab 2 - Câu 3 (Microservices + Jenkins + EKS)
+# NT548 Lab 2 - Microservices + Jenkins + EKS (Ứng dụng quản lý kho hàng)
 
-Repo này là ví dụ microservices tối giản (2 service) để bạn deploy lên EKS bằng Jenkins:
-- `service-b`: trả về JSON + health
-- `service-a`: gọi `service-b` qua DNS nội bộ K8s (`http://service-b:3000`) và trả về kết quả tổng hợp
+Repo này là ví dụ microservices có GUI và dùng PostgreSQL để quản lý kho hàng:
+
+- Đăng ký/đăng nhập nhiều user (nhiều account)
+- Xem tồn kho
+- Nhập kho (thêm hàng)
+- Xuất kho (trừ hàng, kiểm tra đủ tồn)
+
+Hệ thống gồm 3 service:
+
+- `service-a` (GUI): web UI tối giản (login/register + bảng tồn kho + form nhập/xuất)
+- `service-c` (API/Auth): cấp JWT và gọi xuống data service
+- `service-b` (Data): đọc/ghi PostgreSQL (users/items/transactions)
 
 Mục tiêu CI/CD:
 
@@ -40,6 +49,18 @@ Khuyến nghị “tốt nhất” (an toàn + ổn định):
 
 Repo này mặc định theo hướng Jenkins agent có Docker sẵn (phù hợp Jenkins ngoài cluster).
 
+## Kiến trúc & luồng request
+
+Luồng khi truy cập từ ngoài (Ingress) vào GUI/API:
+
+```
+Browser -> Ingress NGINX -> service-a -> service-c -> service-b -> PostgreSQL
+```
+
+- `service-a` expose ra ngoài (Ingress), đồng thời là điểm vào chính.
+- `service-b` và `service-c` để nội bộ cluster (ClusterIP).
+- PostgreSQL chạy trong cluster (StatefulSet) cho mục đích lab/demo.
+
 ## 2) Chuẩn bị AWS/ECR/EKS (1 lần)
 
 ### 2.1 Tạo ECR repositories
@@ -51,13 +72,14 @@ export AWS_REGION=<AWS_REGION>
 
 aws ecr create-repository --region "$AWS_REGION" --repository-name micro-demo/service-a
 aws ecr create-repository --region "$AWS_REGION" --repository-name micro-demo/service-b
+aws ecr create-repository --region "$AWS_REGION" --repository-name micro-demo/service-c
 ```
 
 Kiểm tra:
 
 ```bash
 aws ecr describe-repositories --region "$AWS_REGION" \
-  --repository-names micro-demo/service-a micro-demo/service-b
+  --repository-names micro-demo/service-a micro-demo/service-b micro-demo/service-c
 ```
 
 ### 2.2 IAM cho Jenkins (gợi ý tối thiểu)
@@ -121,6 +143,41 @@ kubectl get ns
 ```
 
 ## 3) Chạy local (tuỳ chọn)
+
+Chạy local với PostgreSQL (gợi ý nhanh):
+
+- Cách đơn giản nhất là dùng Docker để chạy Postgres:
+
+```bash
+docker run --rm -d --name pg-inventory \
+  -e POSTGRES_DB=inventory \
+  -e POSTGRES_USER=inventory \
+  -e POSTGRES_PASSWORD=inventorypass \
+  -p 5432:5432 \
+  postgres:16-alpine
+```
+
+Mở 3 terminal (B -> C -> A):
+
+```bash
+cd services/service-b
+npm install
+DATABASE_URL=postgres://inventory:inventorypass@localhost:5432/inventory PORT=3001 node src/index.js
+```
+
+```bash
+cd services/service-c
+npm install
+SERVICE_B_URL=http://localhost:3001 JWT_SECRET=dev-secret-change-me PORT=3002 node src/index.js
+```
+
+```bash
+cd services/service-a
+npm install
+SERVICE_C_URL=http://localhost:3002 PORT=3000 node src/index.js
+```
+
+Mở GUI: http://localhost:3000/
 
 Mở 2 terminal:
 
@@ -216,6 +273,7 @@ Jenkinsfile đọc các biến môi trường sau (bắt buộc):
 - `EKS_CLUSTER_NAME`
 - `ECR_REPO_SERVICE_A` (vd `micro-demo/service-a`)
 - `ECR_REPO_SERVICE_B` (vd `micro-demo/service-b`)
+- `ECR_REPO_SERVICE_C` (vd `micro-demo/service-c`)
 
 Bạn có thể set ở:
 - Job config (Environment variables) hoặc
@@ -241,7 +299,7 @@ Bạn có thể set ở:
 
 1) Trong Jenkins job, bấm **Build Now**.
 2) Pipeline sẽ:
-- Build `services/service-a` và `services/service-b`
+- Build `services/service-a`, `services/service-b`, `services/service-c`
 - Push image lên ECR với tag = `GIT_COMMIT` (7 ký tự) hoặc `BUILD_NUMBER`
 - Deploy manifests trong `k8s/` và `kubectl set image` để rollout
 
@@ -258,6 +316,12 @@ Test nhanh (port-forward):
 ```bash
 kubectl -n micro-demo port-forward svc/service-a 8080:80
 curl http://localhost:8080/api
+
+Mở GUI:
+
+```bash
+xdg-open http://localhost:8080/
+```
 ```
 ```
 
@@ -343,12 +407,32 @@ Test từ ngoài (thay `<LB_HOST>` bằng EXTERNAL-IP/hostname của ingress-ngi
 
 ```bash
 curl http://<LB_HOST>/healthz
-curl http://<LB_HOST>/api
+```
+
+Mở GUI trên trình duyệt:
+
+```bash
+xdg-open http://<LB_HOST>/
 ```
 
 > Lưu ý: `service-b` để nội bộ cluster (ClusterIP) và được `service-a` gọi qua DNS `http://service-b:3000`.
 
-## 8) Mapping “Câu 3”
+Trong phiên bản quản lý kho:
+- `service-a` gọi `service-c` qua DNS `http://service-c:3000`
+- `service-c` gọi `service-b` qua DNS `http://service-b:3000`
+- `service-b` kết nối Postgres qua `DATABASE_URL` (được set bằng Secret)
+
+## 8) PostgreSQL trong cluster (lab)
+
+Các manifest Postgres:
+
+- `k8s/postgres-secret.yaml` (chứa `POSTGRES_PASSWORD`, `DATABASE_URL`, `JWT_SECRET`)
+- `k8s/postgres-service.yaml`
+- `k8s/postgres-statefulset.yaml`
+
+Bạn nên đổi password/secret trước khi dùng thật. Hiện tại file Secret dùng giá trị demo (base64) để chạy nhanh.
+
+## 9) Mapping “Câu 3”
 
 - Ứng dụng microservices: `services/service-a` và `services/service-b`
 - Docker hoá: mỗi service có `Dockerfile`
